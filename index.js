@@ -43,6 +43,8 @@ function Expire(options) {
   this.expiree = Expire.parse(options.expire || '5 minutes');
   this.interval = Expire.parse(options.interval || '2 minutes');
 
+  this.busy = {};
+
   this.length = 0;
 
   // Start watching for expired items.
@@ -79,6 +81,72 @@ Expire.prototype.get = function get(key, dontUpdate) {
 
   return result.value;
 };
+
+/**
+ * Fetch an item from the cache, and give it to the callback
+ *
+ * @author        Jelle De Loecker   <jelle@codedor.be>
+ * @since         0.0.1
+ * @version       0.0.1
+ *
+ * @param   {String}    key         The name of the value to get
+ * @param   {Function}  callback    The function to call back with the result
+ * @param   {Function}  updateFnc   The function to execute when the value isn't found
+ *
+ * @api public
+ */
+Expire.prototype.fetch = function fetch(key, callback, updateFnc) {
+
+  var that   = this,
+      result = this.cache[key],
+      update = false;
+
+  // If something is already updating, store the callback in a queue
+  if (this.busy[key]) {
+    this.busy[key].queue.push(callback);
+    return;
+  }
+
+  // We are still streaming in data, so callback with nothing
+  if (typeof result !== 'undefined' && result.streaming) {
+    callback();
+    return;
+  }
+
+  // We found a match, make sure that it's not expired.
+  if (result && Date.now() - result.last >= result.expires) {
+    this.remove(key, true);
+    update = true;
+  }
+
+  // If no value has been found, update it
+  if (update || !result) {
+
+    // Create an entry in the busy object
+    // and add the callback as the first function
+    this.busy[key] = {queue: [callback]};
+
+    updateFnc(function(result, expires) {
+      that.set(key, result, expires);
+
+      var fnc;
+
+      while(fnc = that.busy[key].queue.shift()) {
+        fnc(result);
+      }
+
+      // Remove the busy entry
+      delete that.busy[key];
+
+    });
+
+    return;
+  }
+
+  // No problems found, just get the value & call back!
+  callback(this.get(key));
+
+}
 
 /**
  * Stores a new item in the cache, if the key already exists it will override
